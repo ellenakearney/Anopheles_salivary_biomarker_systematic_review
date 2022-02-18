@@ -7,6 +7,10 @@ cd "C:\Users\ellen.kearney\Desktop\eLife\Do and Dta files"
 use "Anopheles salivary biomarkers review.dta", clear
 ************
 
+*remove study 15 which is not included in any analyses as is included as part of study 16
+drop if id==15
+******************
+
 gen log10_hbr_estimate = log10(hbr_estimate)
 
 gen ln_hbr_estimate = ln(hbr_estimate)
@@ -191,6 +195,9 @@ rename p_pfse_igg1_estimate p_pfse_igg1
 rename p_pfcsp_igg3_estimate p_pfcsp_igg3
 rename p_pfse_igg3_estimate p_pfse_igg3
 
+// recodes of dvs to rectify misclassification 
+recode dvs_full 6=8 if id==2 | id==28 | id==3 | id==8
+recode dvs_full .=2 if id==42
 
 gen dvs_albi = 1 if dvs_full==1
 gen dvs_arab = 1 if dvs_full==2 | dvs_full==3
@@ -587,18 +594,82 @@ disp (_b[/var(M1[country])] + _b[/var(M3[country>id])] + _b[/var(M2[country>id])
 gen hbr_entomethod = 1 if hbr_casedetect_n==1 | hbr_casedetect_n==2 | hbr_casedetect_n==4
 recode hbr_entomethod .= 0 if hbr_casedetect_n==3
 
-gsem (ln_hbr_estimate -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
-(M1[country] -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
-(M3[country>id] -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
-(1.hbr_entomethod -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
-(1.hbr_entomethod#c.ln_hbr_estimate -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
-(M2[country>id]#c.ln_hbr_estimate -> successes_all_gsg6), ///
-covstruct(_lexogenous, diagonal) latent(M1 M2 M3 ) nocapslatent 
+*update to xtmelogit approach which was used for eir_ento and reported in the text
+xtmelogit successes_all_gsg6 c.ln_hbr_estimate##i.hbr_entomethod, binomial(all_gsg6_igg_nsubpop) || country: || id: ln_hbr_estimate,  var 
 est store hbrXento
 est save hbrXento
 
+*hbr by study type - to address reviewers comments
+gen longitudinal =1 if study_type2==2
+recode longitudinal .=0 if study_type2!=.
+
+gsem (ln_hbr_estimate -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
+(1.longitudinal -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
+(1.longitudinal#c.ln_hbr_estimate -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
+(M1[country] -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
+(M3[country>id] -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) ///
+(M2[country>id]#c.ln_hbr_estimate -> successes_all_gsg6), ///
+covstruct(_lexogenous, diagonal) latent(M1 M2 M3 ) nocapslatent 
+est store hbr_longitudinal
+
 //Figure 2
 /*
+**********************************************************
+*****Plot on the log2, colour coded by sample size *******
+**********************************************************
+
+gen all_gsg6_igg_nsubpop_cat = 1 if all_gsg6_igg_nsubpop<50
+recode all_gsg6_igg_nsubpop_cat .=2 if all_gsg6_igg_nsubpop>=50 & all_gsg6_igg_nsubpop<100
+recode all_gsg6_igg_nsubpop_cat .=3 if all_gsg6_igg_nsubpop>=100 & all_gsg6_igg_nsubpop<150
+recode all_gsg6_igg_nsubpop_cat .=4 if  all_gsg6_igg_nsubpop>150
+replace all_gsg6_igg_nsubpop_cat =. if  all_gsg6_igg_nsubpop==.
+
+gen prob_nsubpop = prob
+separate prob_nsubpop, by(all_gsg6_igg_nsubpop_cat)
+*******************************
+gsem (ln_hbr_estimate -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) (M1[country] -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) (M3[country>id] -> successes_all_gsg6, family(binomial all_gsg6_igg_nsubpop) link(logit)) (M2[country>id]#c.ln_hbr_estimate -> successes_all_gsg6), covstruct(_lexogenous, diagonal) latent(M1 M2 M3 ) nocapslatent
+est store hbr
+estat ic
+
+preserve
+set obs 477
+egen obs2 = seq() if _n > 387
+egen hbr_estimate_2 = seq() if _n > 387
+replace hbr_estimate_2 = hbr_estimate_2/-10
+
+set obs 567
+egen obs3 = seq() if _n > 387
+egen hbr_estimate_3 = seq() if _n > 477
+replace hbr_estimate_3 = hbr_estimate_3/10
+
+
+replace obs = obs3 
+ replace id = 9999 if _n > 387
+
+replace ln_hbr_estimate = hbr_estimate_2 if id == 9999
+replace ln_hbr_estimate = hbr_estimate_3 if id == 9999 & ln_hbr_estimate==.
+
+gen hbr_dummy = exp(ln_hbr_estimate) 
+gen log2_hbr_dummy = ln(hbr_dummy)/ln(2)
+
+est restore hbr
+predictnl sg6_hbr_prob_predictnl = invlogit(_b[_cons] + _b[ln_hbr_estimate]*log2_hbr_dummy ) if id == 9999, se(sg6_hbr_prob_predictnl_se) ci(sg6_hbr_prob_predictnl_lci sg6_hbr_prob_predictnl_uci)
+
+
+
+drop if id==9999 & log2_hbr_dummy <-4.1
+drop if id==9999 & log2_hbr_dummy >7.1
+
+twoway rarea sg6_hbr_prob_predictnl_lci sg6_hbr_prob_predictnl_uci log2_hbr_dummy if id == 9999 , sort color(red%6) lw(none) || ///
+scatter prob_nsubpop? log2_hbr_dummy   [aweight=all_gsg6_igg_nsubpop] , mcolor(white white white white) mlcolor(black red navy green)  msize(small small small small) || ///
+function y=invlogit(_b[_cons] + _b[ln_hbr_estimate]*((x))), range(-4 7) n(300) lcolor(red)  graphregion(fcolor(white))  graphregion(lcolor(white))  graphregion(ilc(white))   plotregion(ilc(white))  ///
+legend(order( 2 "Observed study anti-gSG6 IgG seroprevalence (sample size <50)" - " " 3 "Observed study anti-gSG6 IgG seroprevalence (sample size 50-100)" - " " 4 "Observed study anti-gSG6 IgG seroprevalence (sample size 100-150)" - " " 5 "Observed study anti-gSG6 IgG seroprevalence (sample size >150)" - " " 6 "Average anti-gSG6 IgG probability (95%CI) by HBR"  " " 1 "" ) size(small)) ytitle(anti-gSG6 IgG seroprevalence (%), size(small)) xtitle(HBR (bites per person per night), size(small)) ///
+xlabel(,labs(small)) ylabel(,labs(small)) play(HBR_yaxis)
+
+restore
+*/
+/*
+//plot on the normal scale
 preserve
 set obs 540
 replace id = 9999 if _n > 387
@@ -700,7 +771,79 @@ br hbr_estimate  sg6_hbrxdvs_prob_predictnl  sg6_hbrxdvs_prob_predictnl_lci  sg6
 
 
 restore
+
+************************************
+*Figure 4 - Supplement 1 - log axis - HBR x DVS
+preserve
+set obs 487
+replace id = 9999 if _n > 387
+egen hbr_estimate_2 = seq() if _n > 387
+replace  hbr_estimate_2 = hbr_estimate_2/-10
+
+set obs 587
+replace id = 9999 if _n > 387
+egen hbr_estimate_2_2 = seq() if _n > 487
+replace  hbr_estimate_2_2 = hbr_estimate_2_2/10
+recode dvs_angam .= 1 if _n > 387
+
+set obs 687
+replace id = 9999 if _n > 387
+egen hbr_estimate_3 = seq() if _n > 587
+replace  hbr_estimate_3 = hbr_estimate_3/-10
+
+set obs 787
+replace id = 9999 if _n > 387
+egen hbr_estimate_3_2 = seq() if _n > 687
+replace  hbr_estimate_3_2 = hbr_estimate_3_2/10
+recode dvs_nonangam .= 1 if _n > 587
+
+set obs 887
+replace id = 9999 if _n > 387
+egen hbr_estimate_4 = seq() if _n > 787
+replace  hbr_estimate_4 = hbr_estimate_4/-10
+
+set obs 987
+replace id = 9999 if _n > 387
+egen hbr_estimate_4_2 = seq() if _n > 887
+replace  hbr_estimate_4_2 = hbr_estimate_4_2/10
+recode dvs_angam_others .= 1 if _n > 787
+
+ replace id = 9999 if _n > 387
+
+replace ln_hbr_estimate = hbr_estimate_2 if id == 9999
+replace ln_hbr_estimate = hbr_estimate_2_2 if id == 9999 & ln_hbr_estimate==.
+replace ln_hbr_estimate = hbr_estimate_3 if id == 9999 & ln_hbr_estimate==.
+replace ln_hbr_estimate = hbr_estimate_3_2 if id == 9999 & ln_hbr_estimate==.
+replace ln_hbr_estimate = hbr_estimate_4 if id == 9999 & ln_hbr_estimate==.
+replace ln_hbr_estimate = hbr_estimate_4_2 if id == 9999 & ln_hbr_estimate==.
+
+gen hbr_dummy = exp(ln_hbr_estimate) 
+gen log2_hbr_dummy = ln(hbr_dummy)/ln(2)
+
+recode dvs_angam .=0 if id==9999
+recode dvs_angam_others .=0 if id==9999
+recode dvs_nonangam .=0 if id==9999
+
+separate prob, by(dvs_3)
+
+est restore hbrXdvs_cat
+predictnl sg6_hbrxdvs_prob_predictnl = invlogit(_b[_cons] + _b[ln_hbr_estimate]*log2_hbr_dummy + _b[1.dvs_angam_others#c.ln_hbr_estimate]*log2_hbr_dummy*dvs_angam_others + _b[1.dvs_angam_others]*dvs_angam_others + _b[1.dvs_nonangam#c.ln_hbr_estimate]*log2_hbr_dummy*dvs_nonangam + _b[1.dvs_nonangam]*dvs_nonangam) if id == 9999, se(sg6_hbrxdvs_prob_predictnl_se) ci(sg6_hbrxdvs_prob_predictnl_lci sg6_hbrxdvs_prob_predictnl_uci)
+
+drop if id==9999 & log2_hbr_dummy <-4.1
+drop if id==9999 & log2_hbr_dummy >7.1
+twoway rarea sg6_hbrxdvs_prob_predictnl_uci sg6_hbrxdvs_prob_predictnl_lci log2_hbr_dummy if id == 9999 & dvs_angam==1, sort color(red%6) lw(none) || ///
+rarea sg6_hbrxdvs_prob_predictnl_uci sg6_hbrxdvs_prob_predictnl_lci log2_hbr_dummy if  id == 9999 & dvs_angam_others==1, sort color(navy%6) lw(none) || ///
+rarea sg6_hbrxdvs_prob_predictnl_uci sg6_hbrxdvs_prob_predictnl_lci log2_hbr_dummy if  id == 9999 & dvs_nonangam==1, sort color(green%6) lw(none) || ///
+scatter prob? log2_hbr_dummy  [aweight=all_gsg6_igg_nsubpop] , mcolor(white white white) mlcolor(green navy red)  msize(small small small) || ///
+function y=invlogit(_b[_cons] + _b[ln_hbr_estimate]*x) if dvs_angam==1, range(-4 7) n(300) lcolor(red)  ||  ///
+function y=invlogit(_b[_cons] + _b[ln_hbr_estimate]*x + _b[1.dvs_angam_others#c.ln_hbr_estimate]*x + _b[1.dvs_angam_others]) if dvs_angam_others==1, range(-4 7) n(300) lcolor(navy)  || ///
+function y=invlogit(_b[_cons] + _b[ln_hbr_estimate]*x + _b[1.dvs_nonangam#c.ln_hbr_estimate]*x + _b[1.dvs_nonangam]) if dvs_nonangam==1, range(-4 7) n(300) lcolor(green)  graphregion(fcolor(white))  graphregion(lcolor(white))  graphregion(ilc(white))   plotregion(ilc(white))  ///
+legend(order(6 "Observed study anti-gSG6 IgG seroprevalence, An. gambiae s.l." - 5 "Observed study anti-gSG6 IgG seroprevalence, An. gambiae s.l. + others" - 4 "Observed study anti-gSG6 IgG seroprevalence, non-An. gambiae s.l." 1 "" 7 "Average anti-gSG6 IgG probability (95%CI) by An. gambiae s.l.-HBR" 2 "" 8 "Average anti-gSG6 IgG probability (95%CI) by An. gambiae s.l. + others-HBR" 3 "" 9 "Average anti-gSG6 IgG probability (95%CI) by non-An. gambiae s.l.-HBR") size(small) bm(tiny)) ytitle(anti-gSG6 IgG seroprevalence (%), size(small)) xtitle(log HBR (bites per person per night), size(small)) ///
+xlabel(,labs(small)) ylabel(,labs(small)) play(HBR_yaxis)
+restore
+
 */
+
 
 ***********************************************************************************
 **************************************EIR*****************************************
@@ -802,8 +945,46 @@ estat ic
 
 
 
-//Figure EIR (not included in final manuscript)
-/*
+//Figure 3
+/* 
+//log2 axis
+preserve
+set obs 477
+egen obs2 = seq() if _n > 387
+egen eir_estimate_2 = seq() if _n > 387
+replace eir_estimate_2 = eir_estimate_2/-10
+
+set obs 567
+egen obs3 = seq() if _n > 387
+egen eir_estimate_3 = seq() if _n > 477
+replace eir_estimate_3 = eir_estimate_3/10
+
+
+replace obs = obs3 
+ replace id = 9999 if _n > 387
+
+replace ln_eir_estimate = eir_estimate_2 if id == 9999
+replace ln_eir_estimate = eir_estimate_3 if id == 9999 & ln_eir_estimate==.
+
+gen eir_dummy = exp(ln_eir_estimate) 
+gen log2_eir_dummy = ln(eir_dummy)/ln(2)
+
+est restore eir
+predictnl sg6_eir_prob_predictnl = invlogit(_b[_cons] + _b[ln_eir_estimate]*log2_eir_dummy ) if id == 9999, se(sg6_eir_prob_predictnl_se) ci(sg6_eir_prob_predictnl_lci sg6_eir_prob_predictnl_uci)
+
+drop if id==9999 & log2_eir_dummy <-3.01
+drop if id==9999 & log2_eir_dummy >10
+
+twoway rarea sg6_eir_prob_predictnl_lci sg6_eir_prob_predictnl_uci log2_eir_dummy if id==9999 & log2_eir_dummy>=-3 & log2_eir_dummy<=9.3 , sort color(red%6) lw(none) || ///
+scatter prob_nsubpop? log2_eir_dummy   [aweight=all_gsg6_igg_nsubpop] , mcolor(white white white white) mlcolor(black red navy green)  msize(small small small small) || ///
+function y=invlogit(_b[_cons] + _b[ln_eir_estimate]*((x))), range(-2.9 9.2) n(300) lcolor(red)  graphregion(fcolor(white))  graphregion(lcolor(white))  graphregion(ilc(white))   plotregion(ilc(white))  ///
+legend(order( 2 "Observed study anti-gSG6 IgG seroprevalence" - " " 6 "Average anti-gSG6 IgG probability (95%CI) by EIR"  " " 1 "" ) size(small)) ytitle(anti-gSG6 IgG seroprevalence (%), size(small)) xtitle(EIR (infective bites per person per year), size(small)) ///
+xlabel(,labs(small)) ylabel(,labs(small)) play(HBR_yaxis)
+
+restore
+*/
+/* 
+// normal axis
 preserve
 set obs 538
 replace id = 9999 if _n > 387
@@ -925,7 +1106,11 @@ disp exp(2*[lns1_1_1]_cons)  / ((exp(2*[lns1_1_1]_cons))+(exp(2*[lns1_1_2]_cons)
 *** level-2 - study + effect (same study, same effect)
 disp (exp(2*[lns1_1_1]_cons) +exp(2*[lns1_1_2]_cons)) / ((exp(2*[lns1_1_1]_cons)) +(exp(2*[lns1_1_2]_cons)) + (3.14^2 / 3))
 
-xtmelogit successes_all_gsg6 c.ln_prev##i.anypspppos_spp, binomial(all_gsg6_igg_nsubpop) ///
+// in response to reviewers comments, we redefined anypspppos_spp to be Africa where Pf predominates and non-Africa where Pf and Pv are co-dominant
+gen anypspppos_spp2 = 1 if region=="Africa"
+recode anypspppos_spp2 .=0
+
+xtmelogit successes_all_gsg6 c.ln_prev##i.anypspppos_spp2, binomial(all_gsg6_igg_nsubpop) ///
 || id: ln_prev, 	 var iter(30)
 
 *** level-2 - study (same study)
@@ -935,7 +1120,50 @@ disp (exp(2*[lns1_1_1]_cons) +exp(2*[lns1_1_2]_cons)) / ((exp(2*[lns1_1_1]_cons)
 
 
 /* 
-//Figure 5
+//Figure 5 - log2 axis
+
+*ln_prev
+preserve
+set obs 477
+egen obs2 = seq() if _n > 387
+egen prev_estimate_2 = seq() if _n > 387
+replace prev_estimate_2 = prev_estimate_2/-10
+
+set obs 567
+egen obs3 = seq() if _n > 387
+egen prev_estimate_3 = seq() if _n > 477
+replace prev_estimate_3 = prev_estimate_3/10
+
+
+replace obs = obs3 
+ replace id = 9999 if _n > 387
+
+replace ln_prev = prev_estimate_2 if id == 9999
+replace ln_prev = prev_estimate_3 if id == 9999 & ln_prev==.
+
+gen prev_dummy = exp(ln_prev) 
+gen log2_prev_dummy = ln(prev_dummy)/ln(2)
+
+est restore ln_prev
+predictnl sg6_prev_prob_predictnl = invlogit(_b[_cons] + _b[ln_prev]*log2_prev_dummy ) if id == 9999, se(sg6_prev_prob_predictnl_se) ci(sg6_prev_prob_predictnl_lci sg6_prev_prob_predictnl_uci)
+
+drop if id==9999 & log2_prev_dummy <-1.2
+drop if id==9999 & log2_prev_dummy >7.2
+
+replace sg6_prev_prob_predictnl_lci = 0 if sg6_prev_prob_predictnl_lci<0
+replace sg6_prev_prob_predictnl_uci = 1 if sg6_prev_prob_predictnl_uci>=1
+
+
+twoway rarea sg6_prev_prob_predictnl_lci sg6_prev_prob_predictnl_uci log2_prev_dummy if id == 9999 & log2_prev_dummy>-1.1& log2_prev_dummy<6.6438562, sort color(red%6) lw(none) || ///
+scatter prob_nsubpop? log2_prev_dummy   [aweight=all_gsg6_igg_nsubpop] , mcolor(white white white white) mlcolor(black red navy green)  msize(small small small small) || ///
+function y=invlogit(_b[_cons] + _b[ln_prev]*((x))), range(-0.9 6.6438562) n(300) lcolor(red)  graphregion(fcolor(white))  graphregion(lcolor(white))  graphregion(ilc(white))   plotregion(ilc(white))  ///
+legend(order( 2 "Observed study anti-gSG6 IgG seroprevalence" - " " 6 "Average anti-gSG6 IgG probability (95%CI) by Plasmodium spp. prevalence"  " " 1 "" ) size(small)) ytitle(anti-gSG6 IgG seroprevalence (%), size(small)) xtitle(Plasmodium spp. prevalence (%), size(small)) ///
+xlabel(-1 "0.5" 0 "1" 1 "2" 2 "4" 3 "8" 4 "16" 5 "32" 6 "64" 6.64 "100",labs(small)) ylabel(,labs(small)) play(HBR_yaxis)
+
+restore
+*/
+/*
+//normal axis
 preserve
 set obs 488
 
